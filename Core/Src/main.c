@@ -21,8 +21,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#define DAC_SAMPLE_SIZE		512
-#define ADC_SAMPLE_SIZE		4096
+#include <stdio.h>
+#include <string.h>
+#include "arm_math.h"
+#include "arm_const_structs.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,6 +34,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define DAC_SAMPLE_SIZE		512
+#define ADC_SAMPLE_SIZE		4096
+#define FFT_SAMPLE_SIZE		2048
+#define ADC_SCALING				0.0008056640508584678173065185546875
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,8 +59,19 @@ UART_HandleTypeDef huart3;
 /* USER CODE BEGIN PV */
 extern uint32_t sineData[DAC_SAMPLE_SIZE];
 uint32_t adcData[ADC_SAMPLE_SIZE]={0,};
+float32_t adcFloat[ADC_SAMPLE_SIZE];
+float32_t adcFFT[ADC_SAMPLE_SIZE];
+float32_t testOutput[FFT_SAMPLE_SIZE];
 uint8_t btnPressed = 0;
 uint8_t adcTransfer = 0;
+arm_status status = ARM_MATH_SUCCESS;
+float32_t maxValue = 0;
+uint32_t testIndex = 0;
+uint32_t fftSize = 1024;
+uint32_t ifftFlag = 0;
+arm_rfft_fast_instance_f32 fS;
+char UART_BUF[1024];
+uint16_t UART_size = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -119,6 +136,48 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+  	if (adcTransfer == 1)
+  	{
+  	  status = ARM_MATH_SUCCESS;
+  	  MX_USART3_UART_Init();
+
+  	  /* Convert the data from 12-bit resolution to voltage */
+  	  for (int i = 0; i < ADC_SAMPLE_SIZE; i++)
+  	  {
+  	  	adcFloat[i] = adcData[i] * ADC_SCALING;
+  	  }
+
+  	  arm_rfft_fast_init_f32(&fS, ADC_SAMPLE_SIZE);
+
+  	  /* Process the data through the RFFT module */
+  	  arm_rfft_fast_f32(&fS, adcFloat, adcFFT, ifftFlag);
+
+  	  /* Process the data through the Complex Magnitude Module for
+  	  calculating the magnitude at each bin */
+  	  arm_cmplx_mag_f32(adcFFT, testOutput, FFT_SAMPLE_SIZE);
+
+  	  /* Transfer data to computer for validation */
+  	  for (int i = 0; i < ADC_SAMPLE_SIZE; i++)
+  	  {
+  	  	UART_size = sprintf(UART_BUF,"%ld,",adcData[i]);
+  	  	HAL_UART_Transmit(&huart3, (uint8_t *)UART_BUF, UART_size, HAL_MAX_DELAY);
+  	  }
+  	  UART_size = sprintf(UART_BUF,"\n,");
+	  	HAL_UART_Transmit(&huart3, (uint8_t *)UART_BUF, UART_size, HAL_MAX_DELAY);
+  	  for (int i = 0; i < FFT_SAMPLE_SIZE; i++)
+  	  {
+  	  	UART_size = sprintf(UART_BUF,"%f,",testOutput[i]);
+  	  	HAL_UART_Transmit(&huart3, (uint8_t *)UART_BUF, UART_size, HAL_MAX_DELAY);
+  	  }
+
+  	  /* Remove DC component from FFT output */
+  	  testOutput[0] = 0;
+
+  	  /* Calculates maxValue and returns corresponding BIN value */
+  	  arm_max_f32(testOutput, FFT_SAMPLE_SIZE, &maxValue, &testIndex);
+
+  	  adcTransfer = 0;
+  	}
   }
   /* USER CODE END 3 */
 }
@@ -278,7 +337,7 @@ static void MX_TIM2_Init(void)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 124;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
@@ -388,6 +447,14 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PD14 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Alternate = GPIO_AF2_TIM4;
+  HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 
   /*Configure GPIO pin : USB_PowerSwitchOn_Pin */
   GPIO_InitStruct.Pin = USB_PowerSwitchOn_Pin;
